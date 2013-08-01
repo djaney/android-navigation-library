@@ -14,26 +14,38 @@ import android.view.Menu;
 import com.google.android.gms.maps.GoogleMap;
 import com.google.android.gms.maps.SupportMapFragment;
 import com.google.android.gms.maps.model.LatLng;
-import com.syntacticsinc.navigationlib.R;
+import com.codertalks.navigationlib.R;
 
 public class NavigationActivity extends FragmentActivity {
 	Navigator navigator;
 	private UpdateOverlayReceiver updateOverlayReceiver;
 	private WakeLock wakelock;
-	public static String RECEIVER_UPDATE_OVERLAY = "com.syntacticsinc.navigationlib.UPDATE_OVERLAYS";
+	public static final String RECEIVER_UPDATE_OVERLAY = "com.codertalks.navigationlib.UPDATE_OVERLAYS";
+	
+	public static final String EXTRA_DESTINATION_LATITUDE = "com.codertalks.navigationlib.EXTRA_LATITUDE";
+	public static final String EXTRA_DESTINATION_LONGITUDE = "com.codertalks.navigationlib.EXTRA_LONGITUDE";
 	@Override
 	protected void onCreate(Bundle savedInstanceState) {
 		super.onCreate(savedInstanceState);
 		setContentView(R.layout.activity_navigation);
 		
 		navigator = new Navigator(this,getMap());
-		navigator.setDestinationLatLng(new LatLng(8.499368,124.625638));
+		
+		
+		Intent intent = getIntent();
+		double latitude = intent.getDoubleExtra(EXTRA_DESTINATION_LATITUDE, 0);
+		double longitude = intent.getDoubleExtra(EXTRA_DESTINATION_LONGITUDE, 0);
+		if(latitude!=0 || longitude!=0)
+			navigator.setDestinationLatLng(new LatLng(latitude,longitude));
+		
 		navigator.moveToDestination();
+		
 		updateOverlayReceiver = new UpdateOverlayReceiver();
 		registerReceiver(updateOverlayReceiver, new IntentFilter(RECEIVER_UPDATE_OVERLAY));
-		
-
 	}
+
+	
+	
 	@Override
 	protected void onDestroy() {
 		setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR);
@@ -43,12 +55,13 @@ public class NavigationActivity extends FragmentActivity {
 	
 	@Override
 	protected void onPause() {
-		wakelock.release();
 		super.onPause();
+		if(wakelock!=null) wakelock.release();
+		if(navigator!=null) navigator.deregisterSensors();
 	}
 	@Override
 	protected void onResume() {
-		
+		super.onResume();
 		if(wakelock==null){
 			setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_NOSENSOR);
 			PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
@@ -56,7 +69,9 @@ public class NavigationActivity extends FragmentActivity {
 		}
 		
 		wakelock.acquire();
-		super.onResume();
+		
+		if(navigator!=null) navigator.registerSensors();
+		
 	}
 	@Override
 	public boolean onCreateOptionsMenu(Menu menu) {
