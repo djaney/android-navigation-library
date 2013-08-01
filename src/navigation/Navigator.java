@@ -3,30 +3,39 @@ package navigation;
 import java.util.ArrayList;
 import java.util.List;
 
-import navigation.Route.OnPointsFetchedListener;
 import android.content.Context;
-import android.content.IntentSender.SendIntentException;
-import android.graphics.Color;
+import android.hardware.Sensor;
+import android.hardware.SensorEvent;
+import android.hardware.SensorEventListener;
+import android.hardware.SensorManager;
 import android.location.Location;
 import android.util.Log;
 
 import com.google.android.gms.maps.CameraUpdateFactory;
 import com.google.android.gms.maps.GoogleMap;
 import com.google.android.gms.maps.GoogleMap.OnCameraChangeListener;
-import com.google.android.gms.maps.MapsInitializer;
 import com.google.android.gms.maps.GoogleMap.OnMyLocationChangeListener;
 import com.google.android.gms.maps.model.CameraPosition;
 import com.google.android.gms.maps.model.LatLng;
-import com.google.android.gms.maps.model.MarkerOptions;
 import com.google.android.gms.maps.model.PolylineOptions;
 
-public class Navigator {
+public class Navigator implements SensorEventListener{
 	private GoogleMap map;
 	private LatLng destinationLatLng;
 	private String destinationAddress;
 	private Route route;
 	private Context context;
-	private float bearing;
+	private float sensorBearing;
+	List<Float> bearingMovingAverage = new ArrayList<Float>();
+	private static int movingAverageStep = 10;
+	private boolean cameraOnSite = false;
+	
+	private SensorManager sensorManager;
+	private Sensor accelerometer;
+	private Sensor magnetometer;
+	
+	float[] gravity = null;
+	float[] geomagnetic = null;
 	
 	private float zoom = 17;
 	private float tilt = 0;
@@ -48,7 +57,20 @@ public class Navigator {
 			public void onCameraChange(CameraPosition camPos) {
 				setZoom(camPos.zoom);
 				
-			}});
+		}});
+		
+		sensorManager = (SensorManager) context.getSystemService(Context.SENSOR_SERVICE);
+		accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER);
+		magnetometer = sensorManager.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD);
+	}
+	
+	public void registerSensors(){
+		sensorManager.registerListener(this, accelerometer, SensorManager.SENSOR_DELAY_UI);
+		sensorManager.registerListener(this, magnetometer, SensorManager.SENSOR_DELAY_UI);
+	}
+	
+	public void deregisterSensors(){
+		sensorManager.unregisterListener(this);
 	}
 	
 	public void moveToDestination(){
@@ -98,20 +120,73 @@ public class Navigator {
 		map.clear();
 		
 		printPath();
-		
+		printCurrentPath();
+		updateCamera();
+		cameraOnSite = true;
+
+	}
+	
+	public void updateCamera(){
 		Location myLocation = map.getMyLocation();
 		if(myLocation!=null){
-			Log.i("Navigation","bearing: "+bearing);
 			// Construct a CameraPosition focusing on Mountain View and animate the camera to that position.
 			CameraPosition cameraPosition = new CameraPosition.Builder()
 			    .target(new LatLng(myLocation.getLatitude(), myLocation.getLongitude()))
 			    .zoom(getZoom())
-			    .bearing(bearing)
 			    .tilt(getTilt())
+			    .bearing(myLocation.hasBearing()?myLocation.getBearing():sensorBearing)
 			    .build();
-			map.animateCamera(CameraUpdateFactory.newCameraPosition(cameraPosition));
+			if(cameraOnSite){
+				map.animateCamera(CameraUpdateFactory.newCameraPosition(cameraPosition));
+			}else{
+				map.moveCamera(CameraUpdateFactory.newCameraPosition(cameraPosition));
+			}
 		}
 	}
+	@Override
+	public void onAccuracyChanged(Sensor arg0, int arg1) {
+		// TODO Auto-generated method stub
+		
+	}
+
+	@Override
+	public void onSensorChanged(SensorEvent event) {
+		if (event.sensor.getType() == Sensor.TYPE_ACCELEROMETER)
+			gravity = event.values;
+		    
+		if (event.sensor.getType() == Sensor.TYPE_MAGNETIC_FIELD)
+			geomagnetic = event.values;
+		
+		if (gravity != null && geomagnetic != null) {
+			float R[] = new float[9];
+			float I[] = new float[9];
+			boolean success = SensorManager.getRotationMatrix(R, I, gravity, geomagnetic);
+			if (success) {
+				float orientation[] = new float[3];
+				SensorManager.getOrientation(R, orientation);
+				if(putBearingSmoother( (float) (orientation[0] * (180/Math.PI)))){
+					if(cameraOnSite) updateCamera();
+				}
+			}
+			
+		}
+	}
+	
+	public boolean putBearingSmoother(float bearing){
+		bearingMovingAverage.add(bearing);
+		if(bearingMovingAverage.size()>movingAverageStep){
+			float acc = 0;
+			for(float i : bearingMovingAverage){
+				acc += i;
+			}
+			this.sensorBearing = acc / bearingMovingAverage.size();
+			bearingMovingAverage.remove(0);
+			return true;
+		}
+		
+		return false;
+	}
+
 	private int getNearestIndex(List<LatLng> path){
 		int index = -1;
 		float distance = -1;
@@ -154,7 +229,7 @@ public class Navigator {
 		
 	}
 	
-	private void printPath() {
+	private void printCurrentPath() {
 		Location myLocation = map.getMyLocation();
 		LatLng myLatLng = new LatLng(myLocation.getLatitude(),myLocation.getLongitude());
 		List<LatLng> path = route.getPath();
@@ -163,8 +238,9 @@ public class Navigator {
 		
 		PolylineOptions option = new PolylineOptions()
 		.width(5)
-		.color(Color.BLUE)
-		.visible(true);
+		.color(0xff0000ff)
+		.visible(true)
+		.geodesic(true);
 		
 		
 		int nearestDistanceIndex = getNearestIndex(path);
@@ -177,17 +253,29 @@ public class Navigator {
 			if(Math.abs(acuteBearing(myLatLng,path.get(i))-heading)<=120 && i>=nearestDistanceIndex){
 				soFar.add(path.get(i));
 			}else{
-				Log.i("Navigation","Heading too great: "+Math.abs(acuteBearing(myLatLng,path.get(i))-heading));
 				break;
 			}
 			heading = acuteBearing(myLatLng,path.get(i));
 			
 		}
-		if(soFar.size()>0)
-			bearing = calculateBearing(myLatLng, soFar.get(soFar.size()-1));
 		
-		soFar.add(myLatLng);
+		
+		//soFar.add(myLatLng);
 		option.addAll(soFar);
+		map.addPolyline(option);
+		
+	}
+	private void printPath() {
+		List<LatLng> path = route.getPath();
+		
+		PolylineOptions option = new PolylineOptions()
+		.width(10)
+		.color(0x550000ff)
+		.visible(true)
+		.geodesic(true);
+		
+	
+		option.addAll(path);
 		map.addPolyline(option);
 		
 	}

@@ -21,7 +21,7 @@ import android.util.Log;
 import android.widget.Toast;
 
 import com.google.android.gms.maps.model.LatLng;
-import com.syntacticsinc.navigationlib.R;
+import com.codertalks.navigationlib.R;
 
 public class Route {
 	private LatLng from;
